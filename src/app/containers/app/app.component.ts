@@ -3,7 +3,9 @@ import { VIEW_MODE } from '../../constants';
 import * as moment from 'moment';
 import { Appointment } from '../../types/appointment.type';
 import { AngularFireDatabase } from 'angularfire2/database';
+import { Observable } from 'rxjs/Observable';
 import Moment = moment.Moment;
+import { BehaviorSubject } from 'rxjs/BehaviorSubject';
 
 
 @Component({
@@ -15,32 +17,35 @@ import Moment = moment.Moment;
                 (setViewMode)="onSetViewMode($event)"
                 (searchChanged)="onSearchChanged($event)">
         </topbar>
-        <div [ngSwitch]="VIEW_MODE.MONTH" class="main">
+        <div [ngSwitch]="viewMode$|async">
             <day-view
                     *ngSwitchCase="VIEW_MODE.DAY"
-                    [appointments]="[]"
-                    [date]="null"
+                    [appointments]="filteredAppointments$|async"
+                    [date]="currentDate$|async"
                     (removeAppointment)="onRemoveAppointment($event)"
                     (addAppointment)="onAddAppointment($event)"
-                    (updateAppointment)="onUpdateAppointment($event)">
+                    (updateAppointment)="onUpdateAppointment($event)"
+            >
             </day-view>
             <week-view
                     *ngSwitchCase="VIEW_MODE.WEEK"
-                    [appointments]="[]"
-                    [year]="2017"
-                    [week]="08"
+                    [appointments]="filteredAppointments$|async"
+                    [year]="currentYear$|async"
+                    [week]="currentWeek$|async"
                     (removeAppointment)="onRemoveAppointment($event)"
                     (addAppointment)="onAddAppointment($event)"
-                    (updateAppointment)="onUpdateAppointment($event)">
+                    (updateAppointment)="onUpdateAppointment($event)"
+            >
             </week-view>
             <month-view
                     *ngSwitchCase="VIEW_MODE.MONTH"
-                    [month]="08"
-                    [year]="2017"
-                    [appointments]="[]"
+                    [month]="currentMonth$|async"
+                    [year]="currentYear$|async"
+                    [appointments]="filteredAppointments$|async"
                     (removeAppointment)="onRemoveAppointment($event)"
                     (addAppointment)="onAddAppointment($event)"
-                    (updateAppointment)="onUpdateAppointment($event)">
+                    (updateAppointment)="onUpdateAppointment($event)"
+            >
             </month-view>
         </div>
     `,
@@ -48,7 +53,56 @@ import Moment = moment.Moment;
 })
 export class AppComponent {
     VIEW_MODE = VIEW_MODE;
+    viewMode$ = new BehaviorSubject(VIEW_MODE.MONTH);
+    // 0--------(+1)----(+1)----(-1)-------------...
+    navigation$ = new BehaviorSubject<number>(0);
+    searchTerm$ = new BehaviorSubject('');
+
+    // -----MONTH---------------------YEAR------...
+    // -----MONTH-------------------------------...
+    // -----(d)---------------------------------...
+    // --------(+1)----(+1)----(-1)-------------...
+    // -----d---d-------d-------d-----d----------...
+
+    private currentDateM$ = this.viewMode$.flatMap((viewMode: string) => {
+        let dateM = moment();
+        return this.navigation$
+            .map((action: number) => {
+                switch (viewMode) {
+                    case VIEW_MODE.MONTH:
+                        return dateM.startOf('month').add(action, 'months');
+                    case VIEW_MODE.WEEK:
+                        return dateM.startOf('week').add(action, 'weeks');
+                    case VIEW_MODE.DAY:
+                        return dateM.startOf('day').add(action, 'days');
+                }
+                return dateM;
+            })
+    }).shareReplay();
+
+    currentDate$ = this.currentDateM$.map(dateM => dateM.toDate());
+    currentYear$ = this.currentDateM$.map(dateM => dateM.year());
+    currentMonth$ = this.currentDateM$.map(dateM => dateM.month());
+    currentWeek$ = this.currentDateM$.map(dateM => dateM.week());
     appointments$ = this.db.list('/appointments');
+    filteredAppointments$ = Observable.combineLatest([this.viewMode$, this.currentDateM$, this.appointments$, this.searchTerm$],
+        (viewMode: string, currentDateM: Moment, appointments: Array<Appointment>, searchTerm: string) => {
+            switch (viewMode) {
+                case VIEW_MODE.MONTH:
+                    return appointments
+                        .filter(item => moment(item.date).format('MM/YYYY') === currentDateM.format('MM/YYYY'))
+                        .filter(item => this.filterByTerm(item, searchTerm));
+                case VIEW_MODE.WEEK:
+                    return appointments
+                        .filter(item => moment(item.date).format('ww/YYYY') === currentDateM.format('ww/YYYY'))
+                        .filter(item => this.filterByTerm(item, searchTerm));
+                case VIEW_MODE.DAY:
+                    return appointments
+                        .filter(item => moment(item.date).format('DD/MM/YYYY') === currentDateM.format('DD/MM/YYYY'))
+                        .filter(item => this.filterByTerm(item, searchTerm));
+
+            }
+        }).shareReplay();
 
     constructor(private db: AngularFireDatabase) {
     }
@@ -58,19 +112,19 @@ export class AppComponent {
     }
 
     onSetViewMode(viewMode: string): void {
-        // todo
+        this.viewMode$.next(viewMode);
     }
 
     onPrevious(): void {
-        // todo
+        this.navigation$.next(-1);
     }
 
     onNext(): void {
-        // todo
+        this.navigation$.next(1);
     }
 
     onSearchChanged(e: string): void {
-        // todo
+        this.searchTerm$.next(e);
     }
 
     onRemoveAppointment(id: string): void {
